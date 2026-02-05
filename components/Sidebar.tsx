@@ -107,12 +107,22 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [suggestionsStatus, setSuggestionsStatus] = useState<string | null>(null);
   const geocoder = useRef<any>(null);
+  const autocompleteService = useRef<any>(null);
+  const placesService = useRef<any>(null);
   const debounceTimer = useRef<number | null>(null);
 
   useEffect(() => {
     if (typeof google !== 'undefined' && !geocoder.current) {
         geocoder.current = new google.maps.Geocoder();
+    }
+    if (typeof google !== 'undefined' && !autocompleteService.current) {
+        autocompleteService.current = new google.maps.places.AutocompleteService();
+    }
+    if (typeof google !== 'undefined' && !placesService.current) {
+        const temp = document.createElement('div');
+        placesService.current = new google.maps.places.PlacesService(temp);
     }
   }, []);
 
@@ -124,56 +134,91 @@ const Sidebar: React.FC<SidebarProps> = ({
         setSuggestions([]);
         setShowDropdown(false);
         setIsFetchingSuggestions(false);
+        setSuggestionsStatus(null);
         return;
     }
 
     // Debounce to prevent flickering and excessive API calls
     debounceTimer.current = window.setTimeout(async () => {
-        if (!geocoder.current) return;
-        
         setIsFetchingSuggestions(true);
-        // We use Geocoder's autocomplete-like fuzzy matching since Places API (New) often requires a separate billing activation
-        // Geocoder is highly robust and usually activated for all projects.
+
         const request = {
-            address: addressQuery,
+            input: addressQuery,
             componentRestrictions: { country: 'us' },
-            region: 'us',
-            bounds: { north: 39.5, south: 39.0, east: -76.5, west: -77.2 } // Biased to MD/Howard County
         };
 
-        geocoder.current.geocode(request, (results: any[], status: any) => {
+        const handlePredictions = (predictions: any[] | null, status: any) => {
             setIsFetchingSuggestions(false);
-            if (status === 'OK' && results && results.length > 0) {
-                // Map results to a standard display format
-                const mapped = results.slice(0, 5).map(res => ({
-                    place_id: res.place_id,
-                    main_text: res.formatted_address.split(',')[0],
-                    secondary_text: res.formatted_address.split(',').slice(1).join(',').trim(),
-                    full_address: res.formatted_address,
-                    lat: res.geometry.location.lat(),
-                    lng: res.geometry.location.lng()
+            setSuggestionsStatus(status || null);
+            if (status === google.maps.places.PlacesServiceStatus.OK && predictions && predictions.length > 0) {
+                const mapped = predictions.slice(0, 5).map((p: any) => ({
+                    place_id: p.place_id,
+                    main_text: p.structured_formatting?.main_text || p.description,
+                    secondary_text: p.structured_formatting?.secondary_text || '',
+                    description: p.description,
                 }));
                 setSuggestions(mapped);
                 setShowDropdown(true);
             } else {
                 setSuggestions([]);
-                // Only show empty state if user has typed a significant query
-                setShowDropdown(addressQuery.length > 8); 
+                setShowDropdown(addressQuery.length > 6);
+            }
+        };
+
+        if (autocompleteService.current) {
+            autocompleteService.current.getPlacePredictions(request, handlePredictions);
+            return;
+        }
+
+        // Fallback to geocoder if Places is unavailable
+        if (!geocoder.current) {
+            setIsFetchingSuggestions(false);
+            return;
+        }
+        geocoder.current.geocode({ address: addressQuery, componentRestrictions: { country: 'us' } }, (results: any[], status: any) => {
+            setIsFetchingSuggestions(false);
+            setSuggestionsStatus(status || null);
+            if (status === 'OK' && results && results.length > 0) {
+                const filtered = results.filter(r => !r.types?.includes('country'));
+                const mapped = filtered.slice(0, 5).map(res => ({
+                    place_id: res.place_id,
+                    main_text: res.formatted_address.split(',')[0],
+                    secondary_text: res.formatted_address.split(',').slice(1).join(',').trim(),
+                    description: res.formatted_address,
+                }));
+                setSuggestions(mapped);
+                setShowDropdown(mapped.length > 0);
+            } else {
+                setSuggestions([]);
+                setShowDropdown(addressQuery.length > 6);
             }
         });
-    }, 500);
+    }, 300);
 
     return () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); };
   }, [addressQuery]);
 
   const handleSuggestionClick = (suggestion: any) => {
       setShowDropdown(false);
-      const location: SearchedLocation = {
-          lat: suggestion.lat,
-          lng: suggestion.lng,
-          displayName: suggestion.full_address
-      };
-      onLocationSelect(location);
+      if (!placesService.current) return;
+      setIsFetchingSuggestions(true);
+
+      placesService.current.getDetails(
+        { placeId: suggestion.place_id, fields: ['geometry', 'formatted_address', 'name'] },
+        (place: any, status: any) => {
+            setIsFetchingSuggestions(false);
+            if (status === google.maps.places.PlacesServiceStatus.OK && place?.geometry?.location) {
+                const location: SearchedLocation = {
+                    lat: place.geometry.location.lat(),
+                    lng: place.geometry.location.lng(),
+                    displayName: place.formatted_address || suggestion.description || suggestion.main_text,
+                };
+                onLocationSelect(location);
+            } else {
+                setSearchError("Could not load place details. Try again.");
+            }
+        }
+      );
   };
 
   const calculateDuration = () => {
@@ -294,6 +339,9 @@ const Sidebar: React.FC<SidebarProps> = ({
                                     </li>
                                 )}
                             </ul>
+                        )}
+                        {addressQuery.length >= 3 && suggestionsStatus && suggestionsStatus !== 'OK' && (
+                            <p className="text-[11px] text-gray-500 mt-2">Autocomplete status: {suggestionsStatus}</p>
                         )}
                     </div>
                   {searchError && <p className="text-red-400 text-sm mt-2">{searchError}</p>}
