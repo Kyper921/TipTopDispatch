@@ -253,28 +253,19 @@ const App: React.FC = () => {
     setHoveredEventTimestamp(null);
 
     const paddedFleet = fleet.length === 2 && /^\d+$/.test(fleet) ? `0${fleet}` : fleet;
-    const ZONAR_CREDENTIALS = { customer: 'how2190', username: 'jpool', password: 'Transportation' };
     const fullStartDateTime = new Date(`${startDate}T${startTime}`);
     const fullEndDateTime = new Date(`${endDate}T${endTime}`);
     const params = new URLSearchParams({
-        ...ZONAR_CREDENTIALS,
-        action: 'showposition',
         operation: 'path',
-        format: 'json',
-        version: '2',
-        logvers: '3.8',
-        reqtype: 'fleet',
         target: paddedFleet,
-        type: 'Standard',
         starttime: Math.floor(fullStartDateTime.getTime() / 1000).toString(),
         endtime: Math.floor(fullEndDateTime.getTime() / 1000).toString(),
         _cb: Date.now().toString()
     });
-    const ZONAR_API_URL = `https://omi.zonarsystems.net/interface.php?${params.toString()}`;
-    const PROXIED_URL = `https://corsproxy.io/?${encodeURIComponent(ZONAR_API_URL)}`;
+    const ZONAR_API_URL = `/api/zonar?${params.toString()}`;
     
     try {
-        const response = await fetch(PROXIED_URL, { cache: 'no-store' });
+        const response = await fetch(ZONAR_API_URL, { cache: 'no-store' });
         const responseText = await response.text();
         if (!response.ok) throw new Error(`Network response was not ok: ${response.status}`);
         const data = JSON.parse(responseText);
@@ -320,16 +311,14 @@ const App: React.FC = () => {
 
   const fetchVehicleLocation = async (vehicleId: string): Promise<CurrentLocationData> => {
       const paddedFleet = vehicleId.length === 2 && /^\d+$/.test(vehicleId) ? `0${vehicleId}` : vehicleId;
-      const ZONAR_CREDENTIALS = { customer: 'how2190', username: 'jpool', password: 'Transportation' };
       const params = new URLSearchParams({
-          ...ZONAR_CREDENTIALS, action: 'showposition', operation: 'current', format: 'xml',
-          version: '2', logvers: '3.1', reqtype: 'fleet', target: paddedFleet, type: 'Standard',
+          operation: 'current',
+          target: paddedFleet,
           _cb: Date.now().toString()
       });
-      const ZONAR_API_URL = `https://omi.zonarsystems.net/interface.php?${params.toString()}`;
-      const PROXIED_URL = `https://corsproxy.io/?${encodeURIComponent(ZONAR_API_URL)}`;
+      const ZONAR_API_URL = `/api/zonar?${params.toString()}`;
 
-      const response = await fetch(PROXIED_URL, { cache: 'no-store' }); 
+      const response = await fetch(ZONAR_API_URL, { cache: 'no-store' }); 
       const responseText = await response.text();
       
       if (!response.ok) throw new Error(`Network response was not ok: ${response.status}`);
