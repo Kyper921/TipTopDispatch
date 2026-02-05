@@ -1,0 +1,168 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Tip Top Dispatch</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+    <!-- Official Google Maps SDK -->
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAuVKdC1rhyUigZxcFq_ThUOjER3Qu_XpQ&libraries=places"></script>
+    <style>
+      /* Set a default dark theme */
+      body {
+        background-color: #111827; /* gray-900 */
+      }
+      /* Leaflet Control Customization for Dark Theme */
+      .leaflet-control-zoom-in, .leaflet-control-zoom-out, .leaflet-control-layers {
+        background-color: #1f2937 !important; /* gray-800 */
+        color: #f9fafb !important; /* gray-50 */
+        border: 1px solid #4b5563 !important; /* gray-600 */
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5) !important;
+      }
+      .leaflet-control-zoom-in:hover, .leaflet-control-zoom-out:hover, .leaflet-control-layers:hover {
+        background-color: #374151 !important; /* gray-700 */
+      }
+      .leaflet-control-layers-expanded {
+        background-color: #1f2937 !important;
+        color: #e5e7eb !important;
+        padding: 10px !important;
+        border-radius: 8px !important;
+      }
+       /* SCOPED Dark Mode Filter: Only applies to layers with this class (Street Map) */
+       .dark-mode-tiles {
+        filter: brightness(0.9) invert(1) contrast(1.1) hue-rotate(200deg) saturate(0.3) brightness(0.8);
+       }
+      
+      /* Custom Waypoint Tooltip Style */
+      .waypoint-tooltip {
+        background-color: rgba(17, 24, 39, 0.85); /* gray-900 with opacity */
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        border: 1px solid #4b5563; /* gray-600 */
+        color: #d1d5db; /* gray-300 */
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+        padding: 8px 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      .waypoint-tooltip .leaflet-tooltip-content {
+        line-height: 1.6;
+        max-width: 250px;
+        white-space: normal;
+      }
+      .leaflet-tooltip-top.waypoint-tooltip::before {
+        border-top-color: #4b5563;
+      }
+      .leaflet-tooltip-bottom.waypoint-tooltip::before {
+        border-bottom-color: #4b5563;
+      }
+      /* Custom Waypoint Marker Styles */
+      .waypoint-marker {
+        cursor: pointer;
+      }
+      .waypoint-inner {
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(6, 182, 212, 0.4); /* cyan-500 with 40% opacity */
+        border: 2px solid transparent;
+        border-radius: 50%;
+        transform-origin: center;
+        transition: background-color 0.2s ease, transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+      .waypoint-marker:hover .waypoint-inner {
+        background-color: rgba(6, 182, 212, 1); /* Full opacity cyan-500 */
+        border-color: #ffffff;
+        transform: scale(1.5);
+      }
+      /* New Highlight Style for hovered events */
+      .waypoint-marker-highlighted .waypoint-inner {
+        background-color: #facc15 !important; /* yellow-400 */
+        border-color: #ffffff !important;
+        transform: scale(2.5) !important;
+        box-shadow: 0 0 12px 4px rgba(250, 204, 21, 0.7); /* yellow-400 glow */
+      }
+      /* Route Stop Marker Styles - Refactored to prevent jumping */
+      .route-stop-marker-container {
+        cursor: pointer;
+      }
+      .route-stop-inner {
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        background-color: #f59e0b; /* amber-500 */
+        border: 2px solid #ffffff;
+        border-radius: 50%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        transform-origin: center;
+        transition: transform 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+      }
+      /* Map hover effect */
+      .route-stop-marker-container:hover .route-stop-inner {
+        transform: scale(1.2);
+      }
+      /* Sidebar hover highlight effect */
+      .route-stop-marker-highlighted .route-stop-inner {
+        transform: scale(1.7) !important;
+        background-color: #facc15 !important; /* yellow-400 */
+        border-color: #ffffff !important;
+        box-shadow: 0 0 12px 4px rgba(250, 204, 21, 0.7) !important; /* yellow-400 glow */
+      }
+      .route-stop-number {
+        color: #1f2937; /* gray-800 */
+        font-weight: bold;
+        font-size: 14px;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+      }
+
+      /* Custom Scrollbar for Webkit */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #1f2937; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #4b5563; 
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #6b7280; 
+      }
+
+      /* Autocomplete Animation */
+      @keyframes loadingLine {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(400%); }
+      }
+      .search-loading-bar {
+        height: 2px;
+        background: linear-gradient(to right, transparent, #06b6d4, transparent);
+        width: 25%;
+        animation: loadingLine 1.5s infinite linear;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "react": "https://esm.sh/react@^19.1.0",
+    "react/": "https://esm.sh/react@^19.1.0/",
+    "react-dom": "https://aistudiocdn.com/react-dom@^19.2.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
