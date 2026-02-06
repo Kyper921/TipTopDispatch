@@ -10,6 +10,13 @@ interface SidebarProps {
   tripData: TripData | null;
   fleet: string;
   setFleet: (value: string) => void;
+  vehicleIds: string[];
+  vehicleMarkerColors: string[];
+  vehicleOptions: string[];
+  onVehicleIdChange: (index: number, value: string) => void;
+  onVehicleSelectAndLocate: (index: number, value: string) => void;
+  onAddVehicleId: () => void;
+  onRemoveVehicleId: (index: number) => void;
   startDate: string;
   setStartDate: (value: string) => void;
   startTime: string;
@@ -97,7 +104,7 @@ const AccordionSection: React.FC<{ title: string; children: React.ReactNode; isO
 
 
 const Sidebar: React.FC<SidebarProps> = ({
-    tripData, fleet, setFleet, startDate, setStartDate, startTime, setStartTime, endDate, setEndDate, endTime, setEndTime, handleFetch, isLoading, error, handleClearTripData, addressQuery, setAddressQuery, searchedLocation, handleAddressSearch, handleClearSearch, isSearching, searchError, setHoveredEventTimestamp, setSelectedEventTimestamp, isSidebarOpen, setIsSidebarOpen, currentLocation, handleFetchCurrentLocation, handleClearCurrentLocation, isFetchingCurrentLocation, currentLocationError, isLiveTracking, setIsLiveTracking, sidebarView, handleFetchRoutes, isFetchingRoutes, routes, routesError, handleBackToMainView, handleSelectRoute, selectedRoute, selectedRouteStops, isFetchingRouteDetails, routeDetailsError, hoveredRouteStopId, setHoveredRouteStopId, isGapiReady, navigationData, isFetchingNavigation, navigationError, onLocationSelect, handleFetchAllVehicles, isFetchingAllVehicles, allVehicleLocations, allVehiclesError
+    tripData, fleet, setFleet, vehicleIds, vehicleMarkerColors, vehicleOptions, onVehicleIdChange, onVehicleSelectAndLocate, onAddVehicleId, onRemoveVehicleId, startDate, setStartDate, startTime, setStartTime, endDate, setEndDate, endTime, setEndTime, handleFetch, isLoading, error, handleClearTripData, addressQuery, setAddressQuery, searchedLocation, handleAddressSearch, handleClearSearch, isSearching, searchError, setHoveredEventTimestamp, setSelectedEventTimestamp, isSidebarOpen, setIsSidebarOpen, currentLocation, handleFetchCurrentLocation, handleClearCurrentLocation, isFetchingCurrentLocation, currentLocationError, isLiveTracking, setIsLiveTracking, sidebarView, handleFetchRoutes, isFetchingRoutes, routes, routesError, handleBackToMainView, handleSelectRoute, selectedRoute, selectedRouteStops, isFetchingRouteDetails, routeDetailsError, hoveredRouteStopId, setHoveredRouteStopId, isGapiReady, navigationData, isFetchingNavigation, navigationError, onLocationSelect, handleFetchAllVehicles, isFetchingAllVehicles, allVehicleLocations, allVehiclesError
 }) => {
   const startTimeStamp = tripData?.events.find(e => e.type === EventType.START)?.timestamp;
   const endTimeStamp = tripData?.events.find(e => e.type === EventType.END)?.timestamp;
@@ -108,6 +115,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [suggestionsStatus, setSuggestionsStatus] = useState<string | null>(null);
+  const [activeVehicleDropdown, setActiveVehicleDropdown] = useState<number | null>(null);
   const geocoder = useRef<any>(null);
   const autocompleteService = useRef<any>(null);
   const placesService = useRef<any>(null);
@@ -221,6 +229,12 @@ const Sidebar: React.FC<SidebarProps> = ({
       );
   };
 
+  const getVehicleOptionsForInput = (value: string) => {
+    const query = value.trim().toUpperCase();
+    if (!query) return vehicleOptions;
+    return vehicleOptions.filter(v => v.includes(query));
+  };
+
   const calculateDuration = () => {
     if (!startTimeStamp || !endTimeStamp) return 'N/A';
     const durationMs = endTimeStamp - startTimeStamp;
@@ -278,14 +292,72 @@ const Sidebar: React.FC<SidebarProps> = ({
           <>
             <div className="p-4 space-y-4 border-b border-gray-700 bg-gray-900/50">
                 <div>
-                    <label htmlFor="fleet" className="block text-sm font-medium text-gray-300 mb-1">Vehicle Number</label>
-                    <div className="relative">
-                        <input type="text" id="fleet" value={fleet} onChange={e => setFleet(e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter') handleFetchCurrentLocation(); }}
-                            className="w-full bg-gray-800 border border-gray-600 rounded-md px-3 py-2 text-white text-base focus:ring-cyan-500 focus:border-cyan-500 pr-10"
-                            placeholder="e.g. 157" />
-                        <button onClick={handleFetchCurrentLocation} disabled={isFetchingCurrentLocation} className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-cyan-400 transition-colors disabled:text-gray-600 disabled:cursor-not-allowed">
-                            {isFetchingCurrentLocation ? <SpinnerIcon className="w-5 h-5 animate-spin" /> : <LocateIcon className="w-5 h-5" />}
+                    <div className="flex items-center justify-between mb-1">
+                        <label htmlFor="fleet-0" className="block text-sm font-medium text-gray-300">Vehicle Number</label>
+                    </div>
+                    <div className="space-y-2">
+                        {vehicleIds.map((vehicleId, index) => (
+                            <div key={index} className="flex items-center gap-2 relative">
+                                <span
+                                    className="inline-block w-3 h-3 rounded-full border border-gray-200/60"
+                                    style={{ backgroundColor: vehicleMarkerColors[index] || '#facc15' }}
+                                    title={`Vehicle ${index + 1} marker color`}
+                                />
+                                <input
+                                    type="text"
+                                    id={`fleet-${index}`}
+                                    value={vehicleId}
+                                    onChange={e => onVehicleIdChange(index, e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') handleFetchCurrentLocation(); }}
+                                    onFocus={() => setActiveVehicleDropdown(index)}
+                                    onBlur={() => setTimeout(() => setActiveVehicleDropdown(prev => prev === index ? null : prev), 100)}
+                                    className="flex-1 bg-gray-800 border border-gray-600 rounded-md px-3 py-2 text-white text-base focus:ring-cyan-500 focus:border-cyan-500"
+                                    placeholder={`e.g. ${index === 0 ? '157' : '205'}`}
+                                />
+                                {index === 0 && (
+                                    <button
+                                        onClick={onAddVehicleId}
+                                        disabled={vehicleIds.length >= 5}
+                                        className="w-8 h-8 rounded-md border border-gray-600 bg-gray-800 text-gray-200 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                                        title="Add another vehicle (max 5)"
+                                    >
+                                        +
+                                    </button>
+                                )}
+                                {index > 0 && (
+                                    <button
+                                        onClick={() => onRemoveVehicleId(index)}
+                                        className="w-8 h-8 rounded-md border border-gray-600 bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700"
+                                        title="Remove vehicle input"
+                                    >
+                                        <CloseIcon className="w-4 h-4 mx-auto" />
+                                    </button>
+                                )}
+                                {activeVehicleDropdown === index && vehicleOptions.length > 0 && (
+                                    <div className="absolute left-5 right-10 top-full mt-1 z-[6100] bg-gray-800 border border-gray-600 rounded-md shadow-xl max-h-96 overflow-y-auto custom-scrollbar">
+                                        {getVehicleOptionsForInput(vehicleId).map((option) => (
+                                            <button
+                                                key={`${index}-${option}`}
+                                                type="button"
+                                                onMouseDown={(e) => {
+                                                    e.preventDefault();
+                                                    onVehicleSelectAndLocate(index, option);
+                                                    setActiveVehicleDropdown(null);
+                                                }}
+                                                className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
+                                            >
+                                                {option}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                    <div className="mt-3">
+                        <button onClick={handleFetchCurrentLocation} disabled={isFetchingCurrentLocation} className="w-full flex items-center justify-center text-sm bg-gray-700 hover:bg-gray-600 text-gray-100 py-2 px-3 rounded-md transition-colors border border-gray-600 disabled:opacity-50">
+                            {isFetchingCurrentLocation ? <SpinnerIcon className="w-4 h-4 animate-spin mr-2" /> : <LocateIcon className="w-4 h-4 mr-2" />}
+                            Locate Vehicles
                         </button>
                     </div>
                     {currentLocationError && <p className="text-red-400 text-sm mt-2">{currentLocationError}</p>}
@@ -348,58 +420,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
             </div>
             
-            <AccordionSection title="Current Status" isOpen={!!currentLocation || !!navigationData || allVehicleLocations.length > 0}>
-                 <div className="p-4 bg-gray-900/30">
-                     {allVehicleLocations.length > 0 && (
-                         <div className="mb-4 animate-fade-in">
-                             <div className="flex justify-between items-center mb-2">
-                                 <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wide">Fleet Overview</h3>
-                                 <div className="flex items-center space-x-2">
-                                    <span className={`text-xs font-semibold ${isLiveTracking ? 'text-green-400 animate-pulse' : 'text-gray-500'}`}>LIVE</span>
-                                    <button onClick={() => setIsLiveTracking(!isLiveTracking)} className={`w-8 h-4 flex items-center rounded-full p-1 duration-300 ease-in-out ${isLiveTracking ? 'bg-green-500' : 'bg-gray-600'}`}>
-                                        <div className={`bg-white w-2.5 h-2.5 rounded-full shadow-md transform duration-300 ease-in-out ${isLiveTracking ? 'translate-x-3.5' : ''}`}></div>
-                                    </button>
-                                 </div>
-                             </div>
-                             <p className="text-gray-300 text-sm">Found <span className="font-bold text-white">{allVehicleLocations.length}</span> active vehicles.</p>
-                             <button onClick={handleClearCurrentLocation} className="text-xs text-gray-400 hover:text-white hover:underline mt-1">Clear All</button>
-                         </div>
-                     )}
-
-                     {currentLocation && (
-                        <div className="animate-fade-in">
-                            <div className="flex justify-between items-center mb-3">
-                                <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wide">Vehicle {currentLocation.fleet}</h3>
-                                <div className="flex items-center space-x-3">
-                                     <div className="flex items-center space-x-2">
-                                        <span className={`text-xs font-semibold ${isLiveTracking ? 'text-green-400 animate-pulse' : 'text-gray-500'}`}>LIVE</span>
-                                        <button onClick={() => setIsLiveTracking(!isLiveTracking)} className={`w-8 h-4 flex items-center rounded-full p-1 duration-300 ease-in-out ${isLiveTracking ? 'bg-green-500' : 'bg-gray-600'}`}>
-                                            <div className={`bg-white w-2.5 h-2.5 rounded-full shadow-md transform duration-300 ease-in-out ${isLiveTracking ? 'translate-x-3.5' : ''}`}></div>
-                                        </button>
-                                     </div>
-                                     <button onClick={handleClearCurrentLocation} className="text-xs text-gray-400 hover:text-white hover:underline">Clear</button>
-                                </div>
-                            </div>
-                            <div className="space-y-1.5 text-sm border-l-2 border-cyan-500/30 pl-3">
-                                <div className="flex justify-between"><span className="text-gray-400">Updated:</span><span className="font-mono text-gray-200">{new Date(currentLocation.timestamp).toLocaleTimeString()}</span></div>
-                                <div className="flex justify-between"><span className="text-gray-400">Speed:</span><span className="font-mono text-gray-200">{currentLocation.speed}</span></div>
-                                <div className="flex justify-between"><span className="text-gray-400">Power:</span><span className="font-mono text-gray-200 capitalize">{currentLocation.power}</span></div>
-                            </div>
-                        </div>
-                    )}
-                
-                    {navigationData && (
-                    <div className="mt-4 pt-3 border-t border-gray-700/50 animate-fade-in">
-                        <h3 className="text-sm font-semibold text-gray-300 mb-2">Navigation Estimate</h3>
-                        <div className="space-y-2 text-sm">
-                            <div className="flex justify-between items-center"><span className="text-gray-400">Est. Travel Time:</span><span className="font-mono text-lg font-bold text-green-400">{formatNavDuration(navigationData.duration)}</span></div>
-                            {navigationData.distance && <div className="flex justify-between items-center"><span className="text-gray-400">Distance:</span><span className="font-mono text-lg font-bold text-green-400">{navigationData.distance}</span></div>}
-                        </div>
-                    </div>
-                    )}
-                 </div>
-            </AccordionSection>
-
             <AccordionSection title="Vehicle Path History" isOpen={true}>
                 <div className="p-4 bg-gray-900/30">
                     <div className="space-y-4">

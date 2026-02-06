@@ -1,7 +1,6 @@
 
 import React, { useEffect, useRef } from 'react';
 import { TripData, EventType, PathPoint, SearchedLocation, CurrentLocationData, RouteStop, NavigationData } from '../types';
-import { CloseIcon } from './icons/Icons';
 
 declare const L: any; // Using Leaflet from CDN
 
@@ -11,12 +10,18 @@ interface MapWrapperProps {
   hoveredEventTimestamp: number | null;
   selectedEventTimestamp: number | null;
   currentLocation: CurrentLocationData | null;
+  trackedLocations?: Array<CurrentLocationData & { markerColor: string }>;
   allVehicleLocations?: CurrentLocationData[]; // Optional array for multi-view
   routeStops: RouteStop[] | null;
   hoveredRouteStopId: number | null;
   navigationData: NavigationData | null;
+  isTracking: boolean;
+  onToggleTracking?: () => void;
   onFindClosestVehicles?: (vehicleId: string) => void;
   onClearMap?: () => void;
+  onClearCurrentLocation?: () => void;
+  onClearPath?: () => void;
+  onClearAddressPath?: () => void;
 }
 
 const createIcon = (svg: string, size: [number, number]) => {
@@ -38,13 +43,43 @@ const formatTooltipContent = (point: PathPoint): string => {
   `;
 };
 
-const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hoveredEventTimestamp, selectedEventTimestamp, currentLocation, allVehicleLocations = [], routeStops, hoveredRouteStopId, navigationData, onFindClosestVehicles, onClearMap }) => {
+const cardinalToDegrees = (heading: string): number => {
+  const map: Record<string, number> = {
+    N: 0,
+    NNE: 22.5,
+    NE: 45,
+    ENE: 67.5,
+    E: 90,
+    ESE: 112.5,
+    SE: 135,
+    SSE: 157.5,
+    S: 180,
+    SSW: 202.5,
+    SW: 225,
+    WSW: 247.5,
+    W: 270,
+    WNW: 292.5,
+    NW: 315,
+    NNW: 337.5,
+  };
+  return map[heading] ?? 0;
+};
+
+const formatFleetMarkerLabel = (fleet: string): string => {
+  const trimmed = (fleet || '').trim().toUpperCase();
+  const vanMatch = trimmed.match(/^V-(\d{1,2})$/);
+  if (vanMatch) return `V${parseInt(vanMatch[1], 10)}`;
+  return trimmed;
+};
+
+const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hoveredEventTimestamp, selectedEventTimestamp, currentLocation, trackedLocations = [], allVehicleLocations = [], routeStops, hoveredRouteStopId, navigationData, isTracking, onToggleTracking, onFindClosestVehicles, onClearMap, onClearCurrentLocation, onClearPath, onClearAddressPath }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<any>(null);
   const tripLayersRef = useRef<any[]>([]);
   const searchMarkerRef = useRef<any>(null);
   const currentLocationMarkerRef = useRef<any>(null);
   const allVehiclesLayerRef = useRef<any>(null);
+  const trackedVehiclesLayerRef = useRef<any>(null);
   const waypointMarkersRef = useRef<Map<number, any>>(new Map());
   const highlightedMarkerRef = useRef<any>(null);
   const routeStopsLayerRef = useRef<any>(null);
@@ -57,16 +92,21 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
       // Define Base Layers
       const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        className: 'dark-mode-tiles' // Only apply dark mode filter to this layer
+        className: 'dark-mode-tiles', // Only apply dark mode filter to this layer
+        maxNativeZoom: 19,
+        maxZoom: 22,
       });
 
       const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+        maxNativeZoom: 19,
+        maxZoom: 22,
       });
 
       mapInstance.current = L.map(mapRef.current, {
         center: [39.2396, -76.8403], // Default center: Howard County, MD
         zoom: 10,
+        maxZoom: 22,
         zoomControl: false, 
         layers: [streetLayer] // Default layer
       });
@@ -322,59 +362,83 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
   // Handle Single Current Location
   useEffect(() => {
     if (!mapInstance.current) return;
-    if (currentLocationMarkerRef.current) {
-        mapInstance.current.removeLayer(currentLocationMarkerRef.current);
-        currentLocationMarkerRef.current = null;
+    if (trackedVehiclesLayerRef.current) {
+        mapInstance.current.removeLayer(trackedVehiclesLayerRef.current);
+        trackedVehiclesLayerRef.current = null;
     }
-    // Only show single marker if we aren't showing the "all vehicles" list (or to highlight specific one)
-    // But logic below handles cleaning up, so we just render if it exists.
-    if (currentLocation) {
-        const currentLocationIcon = createIcon(
-            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="text-yellow-400 w-8 h-8 drop-shadow-lg">
-              <path fill-rule="evenodd" d="M9.69 18.933l.003.001C9.89 19.02 10 19 10 19s.11.02.308-.066l.002-.001.006-.003.018-.008a5.741 5.741 0 00.281-.14c.186-.096.446-.24.757-.433.62-.384 1.445-.976 2.274-1.765C15.302 14.988 17 12.493 17 9A7 7 0 103 9c0 3.492 1.698 5.988 3.355 7.584a13.731 13.731 0 002.274 1.765 11.842 11.842 0 00.757.433.57.57 0 00.281.14l.018.008.006.003zM10 11.25a2.25 2.25 0 100-4.5 2.25 2.25 0 000 4.5z" clip-rule="evenodd" />
-            </svg>`,
-            [32, 32]
-        );
-        const marker = L.marker([currentLocation.lat, currentLocation.lng], {
-            icon: currentLocationIcon,
-            zIndexOffset: 1500,
+    if (trackedLocations.length > 0) {
+        const markers = trackedLocations.map(veh => {
+            const headingDegrees = cardinalToDegrees(veh.heading);
+            const isPoweredOn = veh.power?.toLowerCase() === 'on';
+            const markerColor = veh.markerColor || '#facc15';
+            const icon = createIcon(
+                `<div style="transform: rotate(${headingDegrees}deg); transform-origin: center center;">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="34" height="34" aria-label="Vehicle heading marker">
+                    <g filter="drop-shadow(0 2px 4px rgba(0,0,0,0.55))">
+                      <path d="M20 4 L31 30 L20 24 L9 30 Z"
+                        fill="${isPoweredOn ? markerColor : 'transparent'}"
+                        stroke="${markerColor}"
+                        stroke-width="2.5"
+                        stroke-linejoin="round" />
+                    </g>
+                  </svg>
+                </div>`,
+                [34, 34]
+            );
+
+            const marker = L.marker([veh.lat, veh.lng], {
+                icon,
+                zIndexOffset: 1500,
+            });
+            const popupContent = `
+                <div class="font-sans min-w-[150px]">
+                  <div class="font-bold text-base mb-1">Vehicle: ${veh.fleet}</div>
+                  <div><b>Time:</b> ${new Date(veh.timestamp).toLocaleString()}</div>
+                  <div><b>Speed:</b> ${veh.speed}</div>
+                  <div><b>Power:</b> <span class="capitalize">${veh.power}</span></div>
+                  <button id="track-btn-single-${veh.fleet}" class="mt-3 w-full ${isTracking ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-700 hover:bg-gray-600'} text-white text-xs font-bold py-1.5 px-2 rounded transition-colors shadow-sm flex items-center justify-center">
+                    TRACK: ${isTracking ? 'ON' : 'OFF'}
+                  </button>
+                  <button id="closest-btn-single-${veh.fleet}" class="mt-3 w-full bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold py-1.5 px-2 rounded transition-colors shadow-sm flex items-center justify-center">
+                    View Closest 5 Vehicles
+                  </button>
+                </div>
+            `;
+            marker.bindPopup(popupContent);
+
+            marker.on('popupopen', () => {
+                 const btn = document.getElementById(`closest-btn-single-${veh.fleet}`);
+                 if (btn) {
+                     btn.onclick = (e) => {
+                         e.preventDefault();
+                         e.stopPropagation();
+                         if (onFindClosestVehicles) {
+                            onFindClosestVehicles(veh.fleet);
+                            marker.closePopup();
+                         }
+                     };
+                 }
+                 const trackBtn = document.getElementById(`track-btn-single-${veh.fleet}`);
+                 if (trackBtn) {
+                     trackBtn.onclick = (e) => {
+                         e.preventDefault();
+                         e.stopPropagation();
+                         if (onToggleTracking) {
+                             onToggleTracking();
+                             marker.closePopup();
+                         }
+                     };
+                 }
+             });
+            return marker;
         });
 
-        const popupContent = `
-            <div class="font-sans min-w-[150px]">
-              <div class="font-bold text-base mb-1">Vehicle: ${currentLocation.fleet}</div>
-              <div><b>Time:</b> ${new Date(currentLocation.timestamp).toLocaleString()}</div>
-              <div><b>Speed:</b> ${currentLocation.speed}</div>
-              <div><b>Power:</b> <span class="capitalize">${currentLocation.power}</span></div>
-              <button id="closest-btn-single-${currentLocation.fleet}" class="mt-3 w-full bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold py-1.5 px-2 rounded transition-colors shadow-sm flex items-center justify-center">
-                View Closest 5 Vehicles
-              </button>
-            </div>
-        `;
-        marker.bindPopup(popupContent);
-
-        marker.on('popupopen', () => {
-             const btn = document.getElementById(`closest-btn-single-${currentLocation.fleet}`);
-             if (btn) {
-                 btn.onclick = (e) => {
-                     e.preventDefault();
-                     e.stopPropagation();
-                     if (onFindClosestVehicles) {
-                        onFindClosestVehicles(currentLocation.fleet);
-                        marker.closePopup();
-                     }
-                 };
-             }
-         });
-
-        marker.addTo(mapInstance.current);
-        currentLocationMarkerRef.current = marker;
-        mapInstance.current.flyTo([currentLocation.lat, currentLocation.lng], 16, {
-          animate: true,
-          duration: 1.5
-        });
+        const featureGroup = L.featureGroup(markers);
+        featureGroup.addTo(mapInstance.current);
+        trackedVehiclesLayerRef.current = featureGroup;
+        mapInstance.current.fitBounds(featureGroup.getBounds(), { padding: [50, 50], maxZoom: 16 });
     }
-  }, [currentLocation, onFindClosestVehicles]);
+  }, [trackedLocations, isTracking, onFindClosestVehicles, onToggleTracking]);
 
   // Handle All Vehicles Locations
   useEffect(() => {
@@ -388,8 +452,10 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
 
     if (allVehicleLocations && allVehicleLocations.length > 0) {
         const markers = allVehicleLocations.map(veh => {
+             const markerLabel = formatFleetMarkerLabel(veh.fleet);
+             const isPoweredOn = veh.power?.toLowerCase() === 'on';
              const icon = L.divIcon({
-                html: `<div style="background-color: #eab308; color: #000; border: 2px solid #fff; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">${veh.fleet}</div>`,
+                html: `<div style="background-color: ${isPoweredOn ? '#eab308' : 'transparent'}; color: ${isPoweredOn ? '#000' : '#facc15'}; border: 2px solid #facc15; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">${markerLabel}</div>`,
                 className: 'custom-vehicle-marker',
                 iconSize: [24, 24],
                 iconAnchor: [12, 12]
@@ -405,6 +471,9 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
                       <div><b>Heading:</b> ${veh.heading}</div>
                       <div><b>Last Seen:</b> ${new Date(veh.timestamp).toLocaleTimeString()}</div>
                   </div>
+                  <button id="track-btn-${veh.fleet}" class="mt-3 w-full ${isTracking ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-700 hover:bg-gray-600'} text-white text-xs font-bold py-1.5 px-2 rounded transition-colors shadow-sm flex items-center justify-center">
+                    TRACK: ${isTracking ? 'ON' : 'OFF'}
+                  </button>
                   <button id="closest-btn-${veh.fleet}" class="mt-3 w-full bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold py-1.5 px-2 rounded transition-colors shadow-sm flex items-center justify-center">
                     View Closest 5 Vehicles
                   </button>
@@ -426,6 +495,17 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
                          }
                      };
                  }
+                 const trackBtn = document.getElementById(`track-btn-${veh.fleet}`);
+                 if (trackBtn) {
+                     trackBtn.onclick = (e) => {
+                         e.preventDefault();
+                         e.stopPropagation();
+                         if (onToggleTracking) {
+                            onToggleTracking();
+                            marker.closePopup();
+                         }
+                     };
+                 }
              });
 
              return marker;
@@ -439,7 +519,7 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
         mapInstance.current.fitBounds(featureGroup.getBounds(), { padding: [50, 50], maxZoom: 14 });
     }
 
-  }, [allVehicleLocations, onFindClosestVehicles]);
+  }, [allVehicleLocations, isTracking, onFindClosestVehicles, onToggleTracking]);
 
   useEffect(() => {
     if (!mapInstance.current) return;
@@ -465,16 +545,46 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
   return (
     <div className="relative w-full h-full">
         <div ref={mapRef} className="w-full h-full" />
-        
-        {/* 'Clear Map' Floating Button */}
-        <button
-            onClick={() => onClearMap?.()}
-            className="absolute top-20 right-[10px] z-[1000] flex items-center justify-center p-2 bg-gray-800 border border-gray-600 rounded-md shadow-md text-gray-300 hover:text-red-400 hover:bg-gray-700 transition-all duration-200 group"
-            title="Clear all path data, markers, and searches from map"
-        >
-            <CloseIcon className="w-5 h-5" />
-            <span className="max-w-0 overflow-hidden whitespace-nowrap group-hover:max-w-xs group-hover:ml-2 transition-all duration-300 text-xs font-bold uppercase tracking-tighter">Clear Map</span>
-        </button>
+
+        <div className="absolute top-20 right-[10px] z-[1000] flex flex-col gap-2 items-end">
+            {(trackedLocations.length > 0 || allVehicleLocations.length > 0) && (
+                <button
+                    onClick={() => onClearCurrentLocation?.()}
+                    className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-md shadow-md text-gray-200 hover:text-red-300 hover:bg-gray-700 transition-colors text-xs font-semibold uppercase tracking-wide"
+                    title="Clear current vehicle location markers"
+                >
+                    Clear Current Location
+                </button>
+            )}
+
+            {tripData && (
+                <button
+                    onClick={() => onClearPath?.()}
+                    className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-md shadow-md text-gray-200 hover:text-red-300 hover:bg-gray-700 transition-colors text-xs font-semibold uppercase tracking-wide"
+                    title="Clear vehicle path from map"
+                >
+                    Clear Path
+                </button>
+            )}
+
+            {navigationData && (
+                <button
+                    onClick={() => onClearAddressPath?.()}
+                    className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-md shadow-md text-gray-200 hover:text-red-300 hover:bg-gray-700 transition-colors text-xs font-semibold uppercase tracking-wide"
+                    title="Clear navigation route and searched address"
+                >
+                    Clear Address Path
+                </button>
+            )}
+
+            <button
+                onClick={() => onClearMap?.()}
+                className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-md shadow-md text-red-300 hover:text-red-200 hover:bg-gray-700 transition-colors text-xs font-semibold uppercase tracking-wide"
+                title="Clear all path data, markers, and searches from map"
+            >
+                Clear Map
+            </button>
+        </div>
 
         {currentLocation && (
             <a

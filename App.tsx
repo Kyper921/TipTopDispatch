@@ -14,6 +14,7 @@ const DISCOVERY_DOCS = [
     "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest",
     "https://sheets.googleapis.com/$discovery/rest?version=v4"
 ];
+const VEHICLE_MARKER_COLORS = ['#facc15', '#22c55e', '#38bdf8', '#f97316', '#e879f9'];
 
 // --- TypeScript Augmentation for Google APIs ---
 declare global {
@@ -151,6 +152,8 @@ const App: React.FC = () => {
 
   // Current Location State
   const [currentLocation, setCurrentLocation] = useState<CurrentLocationData | null>(null);
+  const [trackedCurrentLocations, setTrackedCurrentLocations] = useState<Array<CurrentLocationData & { markerColor: string }>>([]);
+  const [trackedVehicleIds, setTrackedVehicleIds] = useState<string[]>(['']);
   const [isFetchingCurrentLocation, setIsFetchingCurrentLocation] = useState<boolean>(false);
   const [currentLocationError, setCurrentLocationError] = useState<string | null>(null);
   
@@ -162,6 +165,7 @@ const App: React.FC = () => {
   const [allVehicleLocations, setAllVehicleLocations] = useState<CurrentLocationData[]>([]);
   const [isFetchingAllVehicles, setIsFetchingAllVehicles] = useState<boolean>(false);
   const [allVehiclesError, setAllVehiclesError] = useState<string | null>(null);
+  const [cachedVehicleNumbers, setCachedVehicleNumbers] = useState<string[] | null>(null);
 
   // Event Interaction State
   const [hoveredEventTimestamp, setHoveredEventTimestamp] = useState<number | null>(null);
@@ -195,8 +199,31 @@ const App: React.FC = () => {
   
   const setFleet = (value: string) => {
     setFleetState(value);
+    setTrackedVehicleIds(prev => {
+      const next = [...prev];
+      next[0] = value;
+      return next;
+    });
     if (routesError) setRoutesError(null);
     if (routeDetailsError) setRouteDetailsError(null);
+  };
+
+  const handleUpdateTrackedVehicleId = (index: number, value: string) => {
+    setTrackedVehicleIds(prev => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+    if (index === 0) setFleet(value);
+  };
+
+  const handleAddTrackedVehicleId = () => {
+    setTrackedVehicleIds(prev => prev.length >= 5 ? prev : [...prev, '']);
+  };
+
+  const handleRemoveTrackedVehicleId = (index: number) => {
+    if (index === 0) return;
+    setTrackedVehicleIds(prev => prev.filter((_, i) => i !== index));
   };
 
   const clearRouteData = () => {
@@ -247,6 +274,7 @@ const App: React.FC = () => {
     setError(null);
     setTripData(null);
     setCurrentLocation(null);
+    setTrackedCurrentLocations([]);
     setAllVehicleLocations([]); 
     setIsViewAllMode(false); 
     setSelectedEventTimestamp(null);
@@ -309,6 +337,13 @@ const App: React.FC = () => {
     setHoveredEventTimestamp(null);
   };
 
+  const handleClearAddressPath = () => {
+    setNavigationData(null);
+    setSearchedLocation(null);
+    setAddressQuery('');
+    setSearchError(null);
+  };
+
   const fetchVehicleLocation = async (vehicleId: string): Promise<CurrentLocationData> => {
       const paddedFleet = vehicleId.length === 2 && /^\d+$/.test(vehicleId) ? `0${vehicleId}` : vehicleId;
       const params = new URLSearchParams({
@@ -348,8 +383,10 @@ const App: React.FC = () => {
       };
   };
 
-  const handleFetchCurrentLocation = async () => {
-    if (!fleet) { setCurrentLocationError("Vehicle Number is required."); return; }
+  const handleFetchCurrentLocation = async (vehicleIdsOverride?: string[]) => {
+    const sourceVehicleIds = vehicleIdsOverride ?? trackedVehicleIds;
+    const requestedVehicleIds = sourceVehicleIds.map(v => v.trim()).filter(v => v !== '');
+    if (requestedVehicleIds.length === 0) { setCurrentLocationError("At least one Vehicle Number is required."); return; }
     setIsFetchingCurrentLocation(true); 
     setCurrentLocationError(null);
     setAllVehicleLocations([]);
@@ -357,8 +394,19 @@ const App: React.FC = () => {
     setAllVehiclesError(null);
     
     try {
-        const locationData = await fetchVehicleLocation(fleet);
-        setCurrentLocation(locationData);
+        const results = await Promise.all(requestedVehicleIds.map(async (vehicleId, index) => {
+            try {
+                const data = await fetchVehicleLocation(vehicleId);
+                return { ...data, markerColor: VEHICLE_MARKER_COLORS[index] };
+            } catch (e) {
+                return null;
+            }
+        }));
+        const locations = results.filter((loc): loc is CurrentLocationData & { markerColor: string } => loc !== null);
+        if (locations.length === 0) throw new Error("No valid locations found for provided vehicle numbers.");
+        setTrackedCurrentLocations(locations);
+        setCurrentLocation(locations[0]);
+        setFleet(locations[0].fleet);
         if (!isLiveTracking && window.innerWidth < 768) setIsSidebarOpen(false);
     } catch (err: any) {
         setCurrentLocationError(`Locate Failed: ${err.message}`);
@@ -367,8 +415,19 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSelectVehicleAndLocate = (index: number, value: string) => {
+      const normalized = value.trim().toUpperCase();
+      if (!normalized) return;
+      const nextVehicleIds = [...trackedVehicleIds];
+      nextVehicleIds[index] = normalized;
+      setTrackedVehicleIds(nextVehicleIds);
+      if (index === 0) setFleet(normalized);
+      handleFetchCurrentLocation(nextVehicleIds);
+  };
+
   const handleClearCurrentLocation = () => { 
       setCurrentLocation(null); 
+      setTrackedCurrentLocations([]);
       setCurrentLocationError(null); 
       setIsLiveTracking(false);
       setAllVehicleLocations([]);
@@ -376,7 +435,10 @@ const App: React.FC = () => {
       setAllVehiclesError(null);
   };
 
-  const fetchAllVehiclesList = async (): Promise<CurrentLocationData[]> => {
+  const fetchVehicleNumbers = async (): Promise<string[]> => {
+        if (cachedVehicleNumbers && cachedVehicleNumbers.length > 0) {
+            return cachedVehicleNumbers;
+        }
         const response = await gapi.client.drive.files.list({
             q: `name='Vehicle List' and mimeType='application/vnd.google-apps.spreadsheet' and '${ROUTES_FOLDER_ID}' in parents and trashed=false`,
             fields: 'files(id, name)',
@@ -389,7 +451,17 @@ const App: React.FC = () => {
         });
         const values = sheetResponse.result.values;
         if (!values || values.length === 0) throw new Error("The Vehicle List sheet is empty.");
-        const vehicleNumbers: string[] = values.flat().filter((v: any) => v && typeof v === 'string' && v.trim() !== '' && /^\d+$/.test(v.trim()));
+        const vehicleNumbers: string[] = values
+            .flat()
+            .filter((v: any) => v && typeof v === 'string' && v.trim() !== '')
+            .map((v: string) => v.trim().toUpperCase())
+            .filter((v: string) => /^\d+$/.test(v) || /^V-\d{2}$/.test(v));
+        setCachedVehicleNumbers(vehicleNumbers);
+        return vehicleNumbers;
+  };
+
+  const fetchAllVehiclesList = async (): Promise<CurrentLocationData[]> => {
+        const vehicleNumbers = await fetchVehicleNumbers();
         const concurrency = 5;
         const results: Array<CurrentLocationData | null> = [];
         for (let i = 0; i < vehicleNumbers.length; i += concurrency) {
@@ -401,6 +473,14 @@ const App: React.FC = () => {
         }
         return results.filter((loc): loc is CurrentLocationData => loc !== null);
   };
+
+  useEffect(() => {
+    if (!isGapiReady) return;
+    if (cachedVehicleNumbers && cachedVehicleNumbers.length > 0) return;
+    fetchVehicleNumbers().catch((err) => {
+      console.warn("Vehicle list preload failed:", err);
+    });
+  }, [isGapiReady, cachedVehicleNumbers]);
 
   const handleFetchAllVehicles = async (isBackground: boolean = false) => {
     if (!isBackground) setIsFetchingAllVehicles(true);
@@ -461,11 +541,11 @@ const App: React.FC = () => {
     if (isLiveTracking) {
         intervalId = window.setInterval(() => {
             if (isViewAllMode) handleFetchAllVehicles(true);
-            else if (fleet) handleFetchCurrentLocation();
+            else if (trackedVehicleIds.some(v => v.trim() !== '')) handleFetchCurrentLocation();
         }, 30000);
     }
     return () => { if (intervalId !== undefined) clearInterval(intervalId); };
-  }, [isLiveTracking, fleet, isViewAllMode]);
+  }, [isLiveTracking, trackedVehicleIds, isViewAllMode]);
 
 
   // UPDATED: Using Google Geocoder for the main search button action (Enter/Click)
@@ -513,6 +593,7 @@ const App: React.FC = () => {
     setSearchedLocation(null);
     setAddressQuery('');
     setCurrentLocation(null);
+    setTrackedCurrentLocations([]);
     setAllVehicleLocations([]);
     setSelectedRouteStops(null);
     setNavigationData(null);
@@ -599,14 +680,14 @@ const App: React.FC = () => {
   return (
     <div className="flex h-screen w-screen bg-gray-900 text-gray-100 font-sans overflow-hidden">
       <Sidebar
-        isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} tripData={tripData} fleet={fleet} setFleet={setFleet} startDate={startDate} setStartDate={setStartDate} startTime={startTime} setStartTime={setStartTime} endDate={endDate} setEndDate={setEndDate} endTime={endTime} setEndTime={setEndTime} handleFetch={handleFetchData} isLoading={isLoading} error={error} handleClearTripData={handleClearTripData} addressQuery={addressQuery} setAddressQuery={setAddressQuery} searchedLocation={searchedLocation} handleAddressSearch={handleAddressSearch} handleClearSearch={handleClearSearch} isSearching={isSearching} searchError={searchError} setHoveredEventTimestamp={setHoveredEventTimestamp} setSelectedEventTimestamp={setSelectedEventTimestamp} currentLocation={currentLocation} handleFetchCurrentLocation={handleFetchCurrentLocation} handleClearCurrentLocation={handleClearCurrentLocation} isFetchingCurrentLocation={isFetchingCurrentLocation} currentLocationError={currentLocationError} isLiveTracking={isLiveTracking} setIsLiveTracking={setIsLiveTracking} handleFetchAllVehicles={() => handleFetchAllVehicles(false)} isFetchingAllVehicles={isFetchingAllVehicles} allVehicleLocations={allVehicleLocations} allVehiclesError={allVehiclesError} sidebarView={sidebarView} handleFetchRoutes={handleFetchRoutes} isFetchingRoutes={isFetchingRoutes} routes={routes} routesError={routesError} handleBackToMainView={() => setSidebarView('main')} handleSelectRoute={handleSelectRoute} selectedRoute={selectedRoute} selectedRouteStops={selectedRouteStops} isFetchingRouteDetails={isFetchingRouteDetails} routeDetailsError={routeDetailsError} hoveredRouteStopId={hoveredRouteStopId} setHoveredRouteStopId={setHoveredRouteStopId} isGapiReady={isGapiReady} navigationData={navigationData} isFetchingNavigation={isFetchingNavigation} navigationError={navigationError} onLocationSelect={handleLocationSelect}
+        isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} tripData={tripData} fleet={fleet} setFleet={setFleet} vehicleIds={trackedVehicleIds} vehicleMarkerColors={VEHICLE_MARKER_COLORS} vehicleOptions={cachedVehicleNumbers || []} onVehicleIdChange={handleUpdateTrackedVehicleId} onVehicleSelectAndLocate={handleSelectVehicleAndLocate} onAddVehicleId={handleAddTrackedVehicleId} onRemoveVehicleId={handleRemoveTrackedVehicleId} startDate={startDate} setStartDate={setStartDate} startTime={startTime} setStartTime={setStartTime} endDate={endDate} setEndDate={setEndDate} endTime={endTime} setEndTime={setEndTime} handleFetch={handleFetchData} isLoading={isLoading} error={error} handleClearTripData={handleClearTripData} addressQuery={addressQuery} setAddressQuery={setAddressQuery} searchedLocation={searchedLocation} handleAddressSearch={handleAddressSearch} handleClearSearch={handleClearSearch} isSearching={isSearching} searchError={searchError} setHoveredEventTimestamp={setHoveredEventTimestamp} setSelectedEventTimestamp={setSelectedEventTimestamp} currentLocation={currentLocation} handleFetchCurrentLocation={() => handleFetchCurrentLocation()} handleClearCurrentLocation={handleClearCurrentLocation} isFetchingCurrentLocation={isFetchingCurrentLocation} currentLocationError={currentLocationError} isLiveTracking={isLiveTracking} setIsLiveTracking={setIsLiveTracking} handleFetchAllVehicles={() => handleFetchAllVehicles(false)} isFetchingAllVehicles={isFetchingAllVehicles} allVehicleLocations={allVehicleLocations} allVehiclesError={allVehiclesError} sidebarView={sidebarView} handleFetchRoutes={handleFetchRoutes} isFetchingRoutes={isFetchingRoutes} routes={routes} routesError={routesError} handleBackToMainView={() => setSidebarView('main')} handleSelectRoute={handleSelectRoute} selectedRoute={selectedRoute} selectedRouteStops={selectedRouteStops} isFetchingRouteDetails={isFetchingRouteDetails} routeDetailsError={routeDetailsError} hoveredRouteStopId={hoveredRouteStopId} setHoveredRouteStopId={setHoveredRouteStopId} isGapiReady={isGapiReady} navigationData={navigationData} isFetchingNavigation={isFetchingNavigation} navigationError={navigationError} onLocationSelect={handleLocationSelect}
       />
       <div className="relative flex-1 h-full">
          <button onClick={() => setIsSidebarOpen(true)} className="md:hidden absolute top-4 left-4 z-[4010] flex items-center p-2 bg-gray-800/70 backdrop-blur-sm border border-gray-600 rounded-md shadow-lg text-white hover:bg-gray-700 transition-colors">
             <MenuIcon className="w-6 h-6" /> <span className="ml-2 font-semibold text-sm">Trip Details</span>
         </button>
         <main className="flex-1 h-full">
-            <MapWrapper tripData={tripData} searchedLocation={searchedLocation} hoveredEventTimestamp={hoveredEventTimestamp} selectedEventTimestamp={selectedEventTimestamp} currentLocation={currentLocation} allVehicleLocations={allVehicleLocations} routeStops={selectedRouteStops} hoveredRouteStopId={hoveredRouteStopId} navigationData={navigationData} onFindClosestVehicles={handleFindClosestVehicles} onClearMap={handleClearAllMapData} />
+            <MapWrapper tripData={tripData} searchedLocation={searchedLocation} hoveredEventTimestamp={hoveredEventTimestamp} selectedEventTimestamp={selectedEventTimestamp} currentLocation={currentLocation} trackedLocations={trackedCurrentLocations} allVehicleLocations={allVehicleLocations} routeStops={selectedRouteStops} hoveredRouteStopId={hoveredRouteStopId} navigationData={navigationData} isTracking={isLiveTracking} onToggleTracking={() => setIsLiveTracking(prev => !prev)} onFindClosestVehicles={handleFindClosestVehicles} onClearMap={handleClearAllMapData} onClearCurrentLocation={handleClearCurrentLocation} onClearPath={handleClearTripData} onClearAddressPath={handleClearAddressPath} />
         </main>
       </div>
     </div>
