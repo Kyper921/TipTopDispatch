@@ -364,9 +364,17 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
         }).bindPopup(`<b>Searched Location:</b><br>${searchedLocation.displayName}`);
         marker.addTo(mapInstance.current);
         searchMarkerRef.current = marker;
-        mapInstance.current.flyTo([searchedLocation.lat, searchedLocation.lng], 15);
+        if (currentLocation) {
+            const bounds = L.latLngBounds(
+                [currentLocation.lat, currentLocation.lng],
+                [searchedLocation.lat, searchedLocation.lng]
+            );
+            mapInstance.current.fitBounds(bounds, { padding: [60, 60], maxZoom: 16 });
+        } else {
+            mapInstance.current.flyTo([searchedLocation.lat, searchedLocation.lng], 15);
+        }
     }
-  }, [searchedLocation]);
+  }, [searchedLocation, currentLocation]);
 
   // Handle Single Current Location
   useEffect(() => {
@@ -551,6 +559,7 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
         });
         navPolyline.addTo(mapInstance.current);
         navigationLayerRef.current = navPolyline;
+        mapInstance.current.fitBounds(navPolyline.getBounds(), { padding: [60, 60], maxZoom: 16 });
 
         const midpointIndex = Math.floor(navigationData.path.length / 2);
         const midpoint = navigationData.path[midpointIndex];

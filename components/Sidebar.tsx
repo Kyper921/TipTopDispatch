@@ -17,6 +17,7 @@ interface SidebarProps {
   onVehicleSelectAndLocate: (index: number, value: string) => void;
   onAddVehicleId: () => void;
   onRemoveVehicleId: (index: number) => void;
+  onClearVehicleId: (index: number) => void;
   startDate: string;
   setStartDate: (value: string) => void;
   startTime: string;
@@ -104,7 +105,7 @@ const AccordionSection: React.FC<{ title: string; children: React.ReactNode; isO
 
 
 const Sidebar: React.FC<SidebarProps> = ({
-    tripData, fleet, setFleet, vehicleIds, vehicleMarkerColors, vehicleOptions, onVehicleIdChange, onVehicleSelectAndLocate, onAddVehicleId, onRemoveVehicleId, startDate, setStartDate, startTime, setStartTime, endDate, setEndDate, endTime, setEndTime, handleFetch, isLoading, error, handleClearTripData, addressQuery, setAddressQuery, searchedLocation, handleAddressSearch, handleClearSearch, isSearching, searchError, setHoveredEventTimestamp, setSelectedEventTimestamp, isSidebarOpen, setIsSidebarOpen, currentLocation, handleFetchCurrentLocation, handleClearCurrentLocation, isFetchingCurrentLocation, currentLocationError, isLiveTracking, setIsLiveTracking, sidebarView, handleFetchRoutes, isFetchingRoutes, routes, routesError, handleBackToMainView, handleSelectRoute, selectedRoute, selectedRouteStops, isFetchingRouteDetails, routeDetailsError, hoveredRouteStopId, setHoveredRouteStopId, isGapiReady, navigationData, isFetchingNavigation, navigationError, onLocationSelect, handleFetchAllVehicles, isFetchingAllVehicles, allVehicleLocations, allVehiclesError
+    tripData, fleet, setFleet, vehicleIds, vehicleMarkerColors, vehicleOptions, onVehicleIdChange, onVehicleSelectAndLocate, onAddVehicleId, onRemoveVehicleId, onClearVehicleId, startDate, setStartDate, startTime, setStartTime, endDate, setEndDate, endTime, setEndTime, handleFetch, isLoading, error, handleClearTripData, addressQuery, setAddressQuery, searchedLocation, handleAddressSearch, handleClearSearch, isSearching, searchError, setHoveredEventTimestamp, setSelectedEventTimestamp, isSidebarOpen, setIsSidebarOpen, currentLocation, handleFetchCurrentLocation, handleClearCurrentLocation, isFetchingCurrentLocation, currentLocationError, isLiveTracking, setIsLiveTracking, sidebarView, handleFetchRoutes, isFetchingRoutes, routes, routesError, handleBackToMainView, handleSelectRoute, selectedRoute, selectedRouteStops, isFetchingRouteDetails, routeDetailsError, hoveredRouteStopId, setHoveredRouteStopId, isGapiReady, navigationData, isFetchingNavigation, navigationError, onLocationSelect, handleFetchAllVehicles, isFetchingAllVehicles, allVehicleLocations, allVehiclesError
 }) => {
   const startTimeStamp = tripData?.events.find(e => e.type === EventType.START)?.timestamp;
   const endTimeStamp = tripData?.events.find(e => e.type === EventType.END)?.timestamp;
@@ -120,6 +121,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const autocompleteService = useRef<any>(null);
   const placesService = useRef<any>(null);
   const debounceTimer = useRef<number | null>(null);
+  const suppressAutocompleteOnceRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (typeof google !== 'undefined' && !geocoder.current) {
@@ -136,6 +138,15 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   useEffect(() => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
+
+    if (suppressAutocompleteOnceRef.current) {
+        suppressAutocompleteOnceRef.current = false;
+        setSuggestions([]);
+        setShowDropdown(false);
+        setIsFetchingSuggestions(false);
+        setSuggestionsStatus(null);
+        return;
+    }
 
     // Don't show dropdown or flicker for short queries
     if (!addressQuery || addressQuery.length < 3) {
@@ -208,6 +219,8 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const handleSuggestionClick = (suggestion: any) => {
       setShowDropdown(false);
+      setSuggestions([]);
+      suppressAutocompleteOnceRef.current = true;
       if (!placesService.current) return;
       setIsFetchingSuggestions(true);
 
@@ -303,17 +316,28 @@ const Sidebar: React.FC<SidebarProps> = ({
                                     style={{ backgroundColor: vehicleMarkerColors[index] || '#facc15' }}
                                     title={`Vehicle ${index + 1} marker color`}
                                 />
-                                <input
-                                    type="text"
-                                    id={`fleet-${index}`}
-                                    value={vehicleId}
-                                    onChange={e => onVehicleIdChange(index, e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') handleFetchCurrentLocation(); }}
-                                    onFocus={() => setActiveVehicleDropdown(index)}
-                                    onBlur={() => setTimeout(() => setActiveVehicleDropdown(prev => prev === index ? null : prev), 100)}
-                                    className="flex-1 bg-gray-800 border border-gray-600 rounded-md px-3 py-2 text-white text-base focus:ring-cyan-500 focus:border-cyan-500"
-                                    placeholder={`e.g. ${index === 0 ? '157' : '205'}`}
-                                />
+                                <div className="relative flex-1">
+                                    <input
+                                        type="text"
+                                        id={`fleet-${index}`}
+                                        value={vehicleId}
+                                        onChange={e => onVehicleIdChange(index, e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') handleFetchCurrentLocation(); }}
+                                        onFocus={() => setActiveVehicleDropdown(index)}
+                                        onBlur={() => setTimeout(() => setActiveVehicleDropdown(prev => prev === index ? null : prev), 100)}
+                                        className="w-full bg-gray-800 border border-gray-600 rounded-md px-3 py-2 pr-9 text-white text-base focus:ring-cyan-500 focus:border-cyan-500"
+                                        placeholder={`e.g. ${index === 0 ? '157' : '205'}`}
+                                    />
+                                    {vehicleId && (
+                                        <button
+                                            onClick={() => onClearVehicleId(index)}
+                                            className="absolute inset-y-0 right-0 px-2 text-gray-500 hover:text-white transition-colors"
+                                            title="Clear vehicle input"
+                                        >
+                                            <CloseIcon className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                </div>
                                 {index === 0 && (
                                     <button
                                         onClick={onAddVehicleId}
@@ -330,7 +354,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         className="w-8 h-8 rounded-md border border-gray-600 bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700"
                                         title="Remove vehicle input"
                                     >
-                                        <CloseIcon className="w-4 h-4 mx-auto" />
+                                        <span className="block leading-none text-base font-semibold">-</span>
                                     </button>
                                 )}
                                 {activeVehicleDropdown === index && vehicleOptions.length > 0 && (
