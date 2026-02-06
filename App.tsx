@@ -14,7 +14,11 @@ const DISCOVERY_DOCS = [
     "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest",
     "https://sheets.googleapis.com/$discovery/rest?version=v4"
 ];
+const SHEETS_MIME_TYPE = 'application/vnd.google-apps.spreadsheet';
+const ROUTE_JSON_MIME_TYPES = new Set(['application/json', 'text/plain']);
 const VEHICLE_MARKER_COLORS = ['#facc15', '#22c55e', '#38bdf8', '#f97316', '#e879f9'];
+const LIVE_TRACKING_INTERVAL_SINGLE_MS = 10000;
+const LIVE_TRACKING_INTERVAL_ALL_MS = 30000;
 
 // --- TypeScript Augmentation for Google APIs ---
 declare global {
@@ -124,6 +128,72 @@ const parseZonarDate = (dateString: string): Date => {
 
     console.warn(`[parseZonarDate] Failed to parse date string: "${dateString}"`);
     return new Date(NaN);
+};
+
+const toNumber = (value: unknown): number => {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string') return parseFloat(value);
+    return NaN;
+};
+
+const mapRowsToRouteStops = (rows: any[][]): RouteStop[] => {
+    return rows.map((row: any[], index: number) => ({
+        id: index,
+        stopNumber: String(row?.[0] || ''),
+        time: String(row?.[1] || ''),
+        stopLocation: String(row?.[2] || ''),
+        studentName: String(row?.[3] || ''),
+        contactName: String(row?.[4] || ''),
+        phoneNumber: String(row?.[5] || ''),
+        otherEquipment: String(row?.[6] || ''),
+        latitude: toNumber(row?.[7]),
+        longitude: toNumber(row?.[8]),
+    })).filter(stop => Number.isFinite(stop.latitude) && Number.isFinite(stop.longitude) && stop.latitude !== 0);
+};
+
+const parseRouteStopsFromJsonPayload = (payload: any): RouteStop[] => {
+    const routeLike = Array.isArray(payload)
+        ? { stops: payload }
+        : (Array.isArray(payload?.routes) ? payload.routes[0] : payload);
+    const stops = Array.isArray(routeLike?.stops) ? routeLike.stops : [];
+    const rows: any[][] = [];
+
+    for (let i = 0; i < stops.length; i++) {
+        const stop = stops[i] || {};
+        const stopNo = String(stop.stopNumber || i + 1);
+        const time = String(stop.time || '');
+        const location = String(stop.location || stop.stopLocation || '');
+        const latitude = stop.latitude ?? stop.lat;
+        const longitude = stop.longitude ?? stop.lng;
+        const students = Array.isArray(stop.students) ? stop.students : [];
+
+        if (students.length > 0) {
+            for (const student of students) {
+                rows.push([
+                    stopNo,
+                    time,
+                    location,
+                    String(student?.name || ''),
+                    String(student?.contactName || ''),
+                    String(student?.phoneNumber || ''),
+                    String(student?.otherEquipment || ''),
+                    latitude,
+                    longitude,
+                ]);
+            }
+            continue;
+        }
+
+        rows.push([stopNo, time, location, '', '', '', '', latitude, longitude]);
+    }
+
+    return mapRowsToRouteStops(rows);
+};
+
+const isJsonRouteFile = (file: DriveFile): boolean => {
+    const name = file.name?.toLowerCase() || '';
+    if (name.endsWith('.json')) return true;
+    return Boolean(file.mimeType && ROUTE_JSON_MIME_TYPES.has(file.mimeType));
 };
 
 
@@ -539,10 +609,11 @@ const App: React.FC = () => {
   useEffect(() => {
     let intervalId: number | undefined;
     if (isLiveTracking) {
+        const intervalMs = isViewAllMode ? LIVE_TRACKING_INTERVAL_ALL_MS : LIVE_TRACKING_INTERVAL_SINGLE_MS;
         intervalId = window.setInterval(() => {
             if (isViewAllMode) handleFetchAllVehicles(true);
             else if (trackedVehicleIds.some(v => v.trim() !== '')) handleFetchCurrentLocation();
-        }, 30000);
+        }, intervalMs);
     }
     return () => { if (intervalId !== undefined) clearInterval(intervalId); };
   }, [isLiveTracking, trackedVehicleIds, isViewAllMode]);
@@ -653,8 +724,12 @@ const App: React.FC = () => {
         if (!busStopsFolderId) throw new Error("Could not find 'Bus Stops' folder.");
         const vehicleFolderId = await findFolderId(paddedFleet, busStopsFolderId);
         if (!vehicleFolderId) throw new Error(`No route folder for ${paddedFleet}.`);
-        const filesResponse = await gapi.client.drive.files.list({ q: `'${vehicleFolderId}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`, fields: 'files(id, name)', orderBy: 'name' });
-        setRoutes(filesResponse.result.files?.map(f => ({ id: f.id, name: f.name })) || []);
+        const filesResponse = await gapi.client.drive.files.list({
+            q: `'${vehicleFolderId}' in parents and (mimeType='${SHEETS_MIME_TYPE}' or mimeType='application/json' or mimeType='text/plain') and trashed=false`,
+            fields: 'files(id, name, mimeType)',
+            orderBy: 'name'
+        });
+        setRoutes(filesResponse.result.files?.map((f: any) => ({ id: f.id, name: f.name, mimeType: f.mimeType })) || []);
         setSidebarView('routes');
     } catch (err: any) {
         setRoutesError(err.message);
@@ -664,12 +739,22 @@ const App: React.FC = () => {
   const handleSelectRoute = async (routeFile: DriveFile) => {
     setIsFetchingRouteDetails(true); setSelectedRoute(routeFile); setRouteDetailsError(null); setSelectedRouteStops(null);
     try {
-        const response = await gapi.client.sheets.spreadsheets.values.get({ spreadsheetId: routeFile.id, range: 'A2:I' });
-        const values = response.result.values;
-        if (!values || values.length === 0) throw new Error("Sheet is empty.");
-        const stops: RouteStop[] = values.map((row: any[], index: number) => ({
-            id: index, stopNumber: row[0] || '', time: row[1] || '', stopLocation: row[2] || '', studentName: row[3] || '', contactName: row[4] || '', phoneNumber: row[5] || '', otherEquipment: row[6] || '', latitude: parseFloat(row[7]), longitude: parseFloat(row[8]),
-        })).filter(stop => !isNaN(stop.latitude) && !isNaN(stop.longitude) && stop.latitude !== 0);
+        let stops: RouteStop[] = [];
+
+        if (isJsonRouteFile(routeFile)) {
+            const response = await gapi.client.drive.files.get({ fileId: routeFile.id, alt: 'media' });
+            const body = response?.body;
+            const payload = typeof body === 'string' ? JSON.parse(body) : (response?.result || body);
+            stops = parseRouteStopsFromJsonPayload(payload);
+            if (!stops.length) throw new Error("JSON route file has no valid geocoded stops.");
+        } else {
+            const response = await gapi.client.sheets.spreadsheets.values.get({ spreadsheetId: routeFile.id, range: 'A2:I' });
+            const values = response.result.values;
+            if (!values || values.length === 0) throw new Error("Sheet is empty.");
+            stops = mapRowsToRouteStops(values);
+            if (!stops.length) throw new Error("Sheet has no valid geocoded stops.");
+        }
+
         setSelectedRouteStops(stops);
         if (window.innerWidth < 768) setIsSidebarOpen(false);
     } catch (err: any) {

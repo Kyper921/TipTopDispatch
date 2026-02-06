@@ -43,6 +43,14 @@ const formatTooltipContent = (point: PathPoint): string => {
   `;
 };
 
+const formatNavEta = (seconds: number): string => {
+  if (seconds < 60) return '< 1 min';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+};
+
 const cardinalToDegrees = (heading: string): number => {
   const map: Record<string, number> = {
     N: 0,
@@ -86,6 +94,7 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
   const routeStopMarkersRef = useRef<Map<number, any>>(new Map());
   const highlightedStopMarkerRef = useRef<any>(null);
   const navigationLayerRef = useRef<any>(null);
+  const navigationEtaMarkerRef = useRef<any>(null);
 
   useEffect(() => {
     if (mapRef.current && !mapInstance.current) {
@@ -529,6 +538,10 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
         mapInstance.current.removeLayer(navigationLayerRef.current);
         navigationLayerRef.current = null;
     }
+    if (navigationEtaMarkerRef.current) {
+        mapInstance.current.removeLayer(navigationEtaMarkerRef.current);
+        navigationEtaMarkerRef.current = null;
+    }
 
     if (navigationData && navigationData.path.length > 0) {
         const navPolyline = L.polyline(navigationData.path, {
@@ -538,6 +551,20 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ tripData, searchedLocation, hov
         });
         navPolyline.addTo(mapInstance.current);
         navigationLayerRef.current = navPolyline;
+
+        const midpointIndex = Math.floor(navigationData.path.length / 2);
+        const midpoint = navigationData.path[midpointIndex];
+        if (midpoint) {
+            const etaIcon = L.divIcon({
+                html: `<div style="background: rgba(17,24,39,0.92); color: #86efac; border: 1px solid #22c55e; border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.45);">ETA ${formatNavEta(navigationData.duration)}</div>`,
+                className: 'bg-transparent border-none',
+                iconSize: [80, 24],
+                iconAnchor: [40, 30],
+            });
+            const etaMarker = L.marker([midpoint[0], midpoint[1]], { icon: etaIcon, interactive: false });
+            etaMarker.addTo(mapInstance.current);
+            navigationEtaMarkerRef.current = etaMarker;
+        }
     }
   }, [navigationData]);
 
