@@ -282,6 +282,11 @@ const Sidebar: React.FC<SidebarProps> = ({
     if (window.innerWidth < 768) setIsSidebarOpen(false);
   };
 
+  const handleLocateVehicles = () => {
+    setActiveVehicleDropdown(null);
+    handleFetchCurrentLocation();
+  };
+
 
   return (
     <aside className={`fixed inset-y-0 left-0 z-[4020] w-full h-full bg-gray-900/80 backdrop-blur-sm border-r border-gray-700 flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out md:relative md:w-96 md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
@@ -322,7 +327,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         id={`fleet-${index}`}
                                         value={vehicleId}
                                         onChange={e => onVehicleIdChange(index, e.target.value)}
-                                        onKeyDown={e => { if (e.key === 'Enter') handleFetchCurrentLocation(); }}
+                                        onKeyDown={e => { if (e.key === 'Enter') handleLocateVehicles(); }}
                                         onFocus={() => setActiveVehicleDropdown(index)}
                                         onBlur={() => setTimeout(() => setActiveVehicleDropdown(prev => prev === index ? null : prev), 100)}
                                         className="w-full bg-gray-800 border border-gray-600 rounded-md px-3 py-2 pr-9 text-white text-base focus:ring-cyan-500 focus:border-cyan-500"
@@ -379,7 +384,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         ))}
                     </div>
                     <div className="mt-3">
-                        <button onClick={handleFetchCurrentLocation} disabled={isFetchingCurrentLocation} className="w-full flex items-center justify-center text-sm bg-gray-700 hover:bg-gray-600 text-gray-100 py-2 px-3 rounded-md transition-colors border border-gray-600 disabled:opacity-50">
+                        <button onClick={handleLocateVehicles} disabled={isFetchingCurrentLocation} className="w-full flex items-center justify-center text-sm bg-gray-700 hover:bg-gray-600 text-gray-100 py-2 px-3 rounded-md transition-colors border border-gray-600 disabled:opacity-50">
                             {isFetchingCurrentLocation ? <SpinnerIcon className="w-4 h-4 animate-spin mr-2" /> : <LocateIcon className="w-4 h-4 mr-2" />}
                             Locate Vehicles
                         </button>
